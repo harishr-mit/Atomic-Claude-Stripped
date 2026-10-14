@@ -1,0 +1,197 @@
+import { defineConfig } from 'vitepress'
+import { withMermaid } from 'vitepress-plugin-mermaid'
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+import { dirname, resolve } from 'node:path'
+
+// Read the latest released version from the changelog release-please maintains.
+// The docs site rebuilds on every push to main, so this nav badge always tracks
+// the newest release without a manual bump.
+function latestVersion(): string {
+    try {
+        const here = dirname(fileURLToPath(import.meta.url))
+        const changelog = readFileSync(resolve(here, '../atomic/CHANGELOG.md'), 'utf-8')
+        const match = changelog.match(/##\s*\[?(\d+\.\d+\.\d+)\]?/)
+        return match ? `v${match[1]}` : ''
+    } catch {
+        return ''
+    }
+}
+
+const version = latestVersion()
+
+const defined_html_tags = new Set([
+    'a', 'abbr', 'address', 'area', 'article', 'aside', 'audio', 'b', 'base',
+    'bdi', 'bdo', 'blockquote', 'body', 'br', 'button', 'canvas', 'caption',
+    'cite', 'code', 'col', 'colgroup', 'data', 'datalist', 'dd', 'del',
+    'details', 'dfn', 'dialog', 'div', 'dl', 'dt', 'em', 'embed', 'fieldset',
+    'figcaption', 'figure', 'footer', 'form', 'h1', 'h2', 'h3', 'h4', 'h5',
+    'h6', 'head', 'header', 'hgroup', 'hr', 'html', 'i', 'iframe', 'img',
+    'input', 'ins', 'kbd', 'label', 'legend', 'li', 'link', 'main', 'map',
+    'mark', 'menu', 'meta', 'meter', 'nav', 'noscript', 'object', 'ol',
+    'optgroup', 'option', 'output', 'p', 'picture', 'pre', 'progress', 'q',
+    'rp', 'rt', 'ruby', 's', 'samp', 'script', 'search', 'section', 'select',
+    'slot', 'small', 'source', 'span', 'strong', 'style', 'sub', 'summary',
+    'sup', 'table', 'tbody', 'td', 'template', 'textarea', 'tfoot', 'th',
+    'thead', 'time', 'title', 'tr', 'track', 'u', 'ul', 'var', 'video', 'wbr',
+])
+
+// Vue components intentionally embedded in markdown (PascalCase). The escape pass
+// below leaves these alone so they render as components, not literal text. Add a
+// component here when you use it inside a .md page.
+const vue_components = new Set(['SessionPlayer'])
+
+function escapeTags(text: string): string {
+    // Handle backslash-escaped angle brackets: \< and \>
+    let result = text.replace(/\\</g, '&lt;').replace(/\\>/g, '&gt;')
+    // Escape <...> where the tag name is NOT a known HTML element
+    result = result.replace(/<(\/?[a-zA-Z][^>]*)>/g, (match, inner) => {
+        const tagName = inner.replace(/^\//, '').split(/[\s/|\\,[\](){}.:;!?='"]/)[0]
+        if (vue_components.has(tagName)) return match
+        if (defined_html_tags.has(tagName.toLowerCase())) return match
+        return `&lt;${inner}&gt;`
+    })
+    return result
+}
+
+function escapeMustaches(text: string): string {
+    return text.replace(/\{\{/g, '&#123;&#123;').replace(/\}\}/g, '&#125;&#125;')
+}
+
+function escapeVueSyntax(src: string): string {
+    const lines = src.split('\n')
+    let inFence = false
+    const result: string[] = []
+
+    for (const line of lines) {
+        if (line.trimStart().startsWith('```')) {
+            inFence = !inFence
+            result.push(line)
+            continue
+        }
+        if (inFence) {
+            result.push(line)
+            continue
+        }
+        result.push(escapeTags(escapeMustaches(line)))
+    }
+    return result.join('\n')
+}
+
+// withMermaid renders fenced ```mermaid blocks as diagrams. No `mermaid.theme` is
+// pinned on purpose: left unset, the plugin swaps between the light and dark themes
+// with VitePress, which is what keeps a diagram legible in both.
+export default withMermaid(defineConfig({
+    markdown: {
+        theme: {
+            dark: 'vesper',
+            light: 'kanagawa-lotus',
+        },
+        config(md) {
+            // Fix double-escaping: our Vite plugin escapes <tag> to &lt;tag&gt; in raw source,
+            // then markdown-it escapes & to &amp; inside code spans, producing &amp;lt;tag&amp;gt;.
+            // Undo the double-escape in rendered code_inline output.
+            const defaultCodeInline = md.renderer.rules.code_inline!
+            md.renderer.rules.code_inline = (tokens, idx, options, env, self) => {
+                const result = defaultCodeInline(tokens, idx, options, env, self)
+                return result
+                    .replace(/&amp;lt;/g, '&lt;').replace(/&amp;gt;/g, '&gt;')
+                    .replace(/&amp;#123;/g, '&#123;').replace(/&amp;#125;/g, '&#125;')
+            }
+        },
+    },
+    vite: {
+        plugins: [
+            {
+                name: 'vitepress-escape-vue-syntax',
+                enforce: 'pre',
+                transform(code, id) {
+                    if (!id.endsWith('.md')) return
+                    return escapeVueSyntax(code)
+                },
+            },
+        ],
+    },
+    appearance: 'force-dark',
+    title: 'Atomic Claude',
+    description: 'Code graphs, wikis, and research-backed agentic coding. Deterministic tools for nondeterministic workflows, in one opinionated Claude Code config.',
+    srcDir: 'docs',
+    base: '/',
+    lastUpdated: true,
+    sitemap: {
+        hostname: 'https://atomic.alonso.network',
+    },
+    // Internal contract docs — kept in-repo for contributors, excluded from the public site.
+    srcExclude: ['spec/**', 'design/**', 'wiki/**'],
+    head: [
+        ['link', { rel: 'icon', type: 'image/png', href: '/logo.png' }],
+        ['meta', { property: 'og:image', content: '/share-image.png' }],
+        ['meta', { property: 'og:image:width', content: '1200' }],
+        ['meta', { property: 'og:image:height', content: '630' }],
+        ['meta', { name: 'twitter:card', content: 'summary_large_image' }],
+        ['meta', { name: 'twitter:image', content: '/share-image.png' }],
+        ['script', { async: '', src: 'https://www.googletagmanager.com/gtag/js?id=G-S57FJE24NJ' }],
+        ['script', {}, "window.dataLayer=window.dataLayer||[];function gtag(){dataLayer.push(arguments)}gtag('js',new Date());gtag('config','G-S57FJE24NJ')"],
+    ],
+    themeConfig: {
+        logo: '/logo.png',
+        nav: [
+            { text: 'Guides', link: '/guides/install' },
+            { text: 'Reference', link: '/reference/concepts' },
+            {
+                text: 'Links',
+                items: [
+                    { text: 'GitHub', link: 'https://github.com/damusix/atomic-claude' },
+                    { text: 'Releases', link: 'https://github.com/damusix/atomic-claude/releases' },
+                    { text: 'Credits', link: '/credits' },
+                ],
+            },
+            ...(version
+                ? [{ text: version, link: `https://github.com/damusix/atomic-claude/releases/tag/${version}` }]
+                : []),
+        ],
+        sidebar: [
+            {
+                text: 'Guides',
+                items: [
+                    { text: 'Install', link: '/guides/install' },
+                    { text: 'Getting Started', link: '/guides/getting-started' },
+                    { text: 'Knowledge Base', link: '/guides/knowledge-base' },
+                    { text: 'Code-intel MCP', link: '/guides/code-intel-mcp' },
+                    { text: 'Contributing', link: '/guides/contributing' },
+                    { text: 'Evaluations', link: '/guides/evaluations' },
+                ],
+            },
+            {
+                text: 'Reference',
+                items: [
+                    { text: 'Concepts', link: '/reference/concepts' },
+                    { text: 'Workflow', link: '/reference/workflow' },
+                    { text: 'Commands', link: '/reference/commands' },
+                    { text: 'Skills', link: '/reference/skills' },
+                    { text: 'Agents', link: '/reference/agents' },
+                    { text: 'Output Style', link: '/reference/output-style' },
+                    { text: 'Repo Wiki', link: '/reference/repo-wiki' },
+                    { text: 'Realm Wiki', link: '/reference/realm-wiki' },
+                    { text: 'Code Intelligence', link: '/reference/code-intel' },
+                    { text: 'Serve', link: '/reference/serve' },
+                    { text: 'Inter-session Bus', link: '/reference/bus' },
+                    { text: 'REPL', link: '/reference/repl' },
+                    { text: 'Retro', link: '/reference/retro' },
+                    { text: 'Docs index', link: '/reference/docs-index' },
+                    { text: 'Repo config (atomic.toml)', link: '/reference/atomic-toml' },
+                    { text: 'Conventions', link: '/reference/conventions' },
+                ],
+            },
+        ],
+        socialLinks: [
+            { icon: 'github', link: 'https://github.com/damusix/atomic-claude' },
+        ],
+        search: {
+            provider: 'local',
+        },
+        footer: {
+            message: 'Released under the MIT License.',
+        },
+    },
+}))

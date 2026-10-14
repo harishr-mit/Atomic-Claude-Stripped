@@ -1,0 +1,248 @@
+/* pages/Page — the injected markdown body carries `md-content`, so the whole
+   editorial typography set in public/app.css (serif heading scale, prose
+   rhythm, links, blockquotes, lists) applies as authored. This file covers
+   only what that set does not: the loading skeleton, the directory listing,
+   the not-found view, the column geometry, and table presentation. */
+
+.page-skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 1rem 0;
+}
+
+.page-skeleton-line {
+  height: 1em;
+  border-radius: 4px;
+  background: var(--paper-sunk, #f5f3ee);
+  animation: page-skeleton-pulse 1.2s ease-in-out infinite;
+}
+
+.page-skeleton-title {
+  width: 40%;
+  height: 1.5em;
+}
+
+.page-skeleton-short {
+  width: 60%;
+}
+
+@keyframes page-skeleton-pulse {
+  0%,
+  100% {
+    opacity: 0.6;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+/* ============================================================
+   DIRECTORY LISTING
+   ============================================================ */
+
+.page-dir-listing ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-width: 860px;
+}
+
+.dir-entry + .dir-entry {
+  border-top: 1px solid var(--hairline);
+}
+
+.dir-entry-link,
+.dir-entry-link:link,
+.dir-entry-link:visited {
+  display: flex;
+  gap: 11px;
+  padding: 11px 10px;
+  border-radius: 8px;
+  color: var(--ink-soft);
+  text-decoration: none;
+  border-bottom: 0;
+  transition: background 0.12s;
+}
+
+.dir-entry-link:hover {
+  background: color-mix(in srgb, var(--ink) 4%, transparent);
+}
+
+.dir-entry-icon {
+  flex-shrink: 0;
+  margin-top: 3px;
+  color: var(--ink-ghost);
+}
+
+.dir-entry-text {
+  min-width: 0;
+}
+
+.dir-entry-head {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.dir-entry-title {
+  color: var(--amber);
+  font-size: 15px;
+  font-weight: 500;
+}
+
+/* The addressable name, beside the human one — a listing that shows only the
+   title cannot tell you what to link to. */
+.dir-entry-name {
+  color: var(--ink-faint);
+  font-family: var(--mono);
+  font-size: 11px;
+}
+
+.dir-entry-badge {
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--ink) 7%, transparent);
+  color: var(--ink-faint);
+  font-family: var(--mono);
+  font-size: 8.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.dir-entry-summary {
+  display: block;
+  margin-top: 3px;
+  color: var(--ink-faint);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.page-not-found code {
+  background: var(--paper-sunk, #f5f3ee);
+  padding: 0.1em 0.35em;
+  border-radius: 3px;
+}
+
+/* ============================================================
+   COLUMN GEOMETRY
+   ============================================================ */
+
+/* The frame is wide so tables, code, and diagrams have room. Running prose
+   is capped separately below — a 1200px paragraph is ~150 characters a line,
+   roughly twice what a reader tracks without losing their place. */
+.page-content-inner {
+  max-width: var(--page-measure, 1200px);
+}
+
+/* A route that sets --page-measure: none opts out of the measure entirely —
+   max-width takes the keyword directly, so no calc or fallback is involved. */
+
+/* The carried .md-content caps the whole container at 70ch, which caps tables
+   and code blocks along with the prose. Releasing the container and capping
+   the text elements individually is what lets a wide table use the frame while
+   a paragraph keeps its measure. */
+.page-body.md-content {
+  max-width: none;
+}
+
+/* The measure is per element, not per container — app.css's --md-measure caps
+   running text while tables, code blocks, and diagrams keep the whole frame.
+   Capping the container was what cost the wasted right-hand column; capping
+   only the prose does not, and a paragraph at the full 1088px runs about 140
+   characters, well past the ~45-90 a reader tracks without losing the line. */
+
+/* Long inline code (paths, flags) is the main cause of horizontal overflow in
+   these docs — let it wrap rather than push the column. `break-word` rather
+   than `anywhere`: break the run only when it would not otherwise fit, so a
+   chip that has room stays whole. */
+.page-body :not(pre) > code {
+  overflow-wrap: break-word;
+}
+
+/* Anchor targets land clear of the top edge. Aligning a heading flush with
+   the scrollport puts it hard against the header's border and clips the h2
+   marker, which app.css positions above the text baseline at top:-22px/9px —
+   so the section you jumped to opens looking cut off. */
+.page-body :is(h1, h2, h3, h4, h5, h6) {
+  scroll-margin-top: 28px;
+}
+
+/* ============================================================
+   TABLES
+   ============================================================ */
+
+/* Scrolls inside its own box instead of competing with the column for width.
+   The border makes the box read as one object, so a mid-table scroll looks
+   deliberate rather than like the layout broke. */
+.table-scroll {
+  max-width: 100%;
+  margin: 20px 0 24px;
+  overflow-x: auto;
+  border: 1px solid var(--hairline-2);
+  border-radius: 9px;
+  background: var(--paper-raised);
+}
+
+/* Full width, with no max-content floor. The floor is what let one prose cell
+   set the width of every column under it and push the table into a horizontal
+   scroll; without it the 300px cap in app.css shapes the distribution instead.
+   The cap binds while columns compete for width — with only two of them the
+   table still has to fill 100%, so the slack lands in the wider column. */
+/* Full width, and free to grow past it. The 300px cell cap in app.css bounds
+   what max-content can reach, so a table only outgrows the frame once it has
+   enough columns to need to — and then this box scrolls rather than crushing
+   them. Without the cap this floor is what let one prose cell run away. */
+.table-scroll table {
+  width: 100%;
+  min-width: max-content;
+  margin: 0;
+  border-collapse: collapse;
+}
+
+/* No nowrap: headers wrap within the 10rem column cap set in app.css, rather
+   than widening the column past it. */
+.table-scroll th {
+  position: sticky;
+  top: 0;
+  background: var(--paper-sunk);
+  border-bottom: 1px solid var(--hairline-2);
+}
+
+.table-scroll td {
+  border-bottom: 1px solid var(--hairline);
+  vertical-align: top;
+}
+
+/* Zebra banding, barely there: enough to track a row across a wide table,
+   not enough to read as a second border system. */
+.table-scroll tbody tr:nth-child(even) {
+  background: color-mix(in srgb, var(--ink) 2.5%, transparent);
+}
+
+.table-scroll tbody tr:last-child td {
+  border-bottom: none;
+}
+
+/* Table cells are dense and often full of identifiers — a slightly smaller,
+   tighter line than body prose keeps rows scannable. */
+.table-scroll th,
+.table-scroll td {
+  padding: 9px 14px;
+  font-size: 13.5px;
+  line-height: 1.5;
+}
+
+/* A path in a cell wraps rather than holding the column open past the cap, and
+   at that width it wraps often. Bordered chips cloned onto every fragment read
+   as several separate values, so in a cell the treatment drops to a tint —
+   sliced, not cloned, so one path stays one run. */
+.md-content .table-scroll td code {
+  font-size: 12px;
+  overflow-wrap: break-word;
+  border: 0;
+  padding: 0.1em 0.3em;
+  box-decoration-break: slice;
+  -webkit-box-decoration-break: slice;
+}

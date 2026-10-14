@@ -1,0 +1,111 @@
+# Getting started
+
+
+You have run `atomic claude install`. The binary is on your `PATH` and the bundle is in `~/.claude/`. This guide takes you from there to a first real task, in the order that pays off fastest. Each step works on its own, so you can stop after any one of them and still come out ahead.
+
+If you have not installed yet, start with the [install guide](/guides/install) and come back here.
+
+
+### TLDR
+
+Too lazy to read? Totally understand...
+
+```text
+/atomic-help Give me a tour of atomic. I have no idea what I'm doing. I'm new to this.
+```
+
+
+## Step 1 — Check the output style
+
+
+This is the one piece that needs no project setup and changes every reply, and install already turned it on. `atomic claude install` seeds `"outputStyle": "Atomic"` into `~/.claude/settings.json`, so every project without its own override starts on Atomic. Replies lose the filler and lead with the answer.
+
+Confirm it took by asking any question and watching the shape of the reply: short, structured, no preamble. `atomic doctor` reports the same thing without opening a session.
+
+The style is read once at session start, so if you installed mid-session, open a new one or run `/clear`.
+
+To use a different style in one project, run `/config`, select **Output style**, and pick another. That writes `.claude/settings.local.json` for that project only, and the seed never overwrites it. To stop the seeding entirely, run `atomic config set output_style.seed false`. Deleting the key does not work, because the session-start hook writes it back.
+
+
+## Step 2 — Set up a repo
+
+
+Open a repo you work in and run two commands.
+
+```text
+/setup-wiki
+/refresh-wiki
+```
+
+`/setup-wiki` audits the repo for the conventions atomic expects: the `.claude/` layout and `.gitignore` rules for scratch and worktree directories (scaffolded by one idempotent `atomic repo init` call when the binary is present), the `docs/` layout, and a `CLAUDE.md`. It proposes only what is missing and never overwrites. It makes no commits.
+
+`/refresh-wiki` is the step that stops the guessing. It walks the repo and writes a standing model of it to `docs/wiki/index.md` (with the deterministic scan at `docs/wiki/scan.md` and per-domain files beside it): the framework, the build and test and lint commands, the languages, and a map of which directories form which feature. Claude reads that model before it reads your code, so a new session knows your stack instead of inventing `npm` scripts that do not exist. Ship commands refresh the model as the repo changes, so you do not hand-maintain it. The refresh also writes one pointer card per domain under `.claude/rules/wiki/`: when Claude opens a file in a domain, the card names that domain's page, contracts, and references, and reminds it to update them on behavior changes or renames.
+
+After this step, ask Claude something about the project. It answers from the wiki rather than from a guess.
+
+
+## Step 3 — Run your first task
+
+
+When you are not sure which command fits a situation, ask the router:
+
+```text
+/atomic-help
+```
+
+It reads your git state and recommends one next command. For the full map of what exists, pass it a topic (`/atomic-help tour`).
+
+For real work, you have two paths.
+
+**Stay in the loop.** Plan, implement, and ship as separate commands, each with its own approval gate:
+
+```text
+/atomic-plan add rate limiting to the login endpoint
+/subagent-implementation @docs/spec/rate-limiting.md
+/commit pr
+```
+
+`/atomic-plan` writes a spec. `/subagent-implementation` runs an implement-review loop with test-first subagents and commits each green checkpoint. `/commit pr` commits and opens the PR (or `/commit` alone to commit without pushing).
+
+**Hand it off.** Give `/autopilot` a task or a GitHub issue number and it runs the whole lifecycle on its own. The only decision left to you is how to merge:
+
+```text
+/autopilot 142 commit squash merge
+```
+
+Start with the in-the-loop path while you build trust in the system, then reach for autopilot once you know how it works. The [workflow reference](/reference/workflow) covers both in depth.
+
+
+## Step 4 — Index your code (optional)
+
+
+The repo wiki gives Claude a prose map of the repo. The code-intel engine gives it a precise one: a symbol graph of every definition, call, and import. Build it once from the repo root:
+
+```text
+atomic code index
+```
+
+Once the index exists, the investigator, reviewer, and wiki agents query the graph instead of grepping, and you can query it yourself from the terminal with no Claude involved. Indexing is opt-in and everything degrades to plain search when it is absent. See the [code intelligence reference](/reference/code-intel), including how to use it as a standalone CLI.
+
+
+## Keeping atomic current
+
+
+One command updates both the binary and the bundle:
+
+```text
+atomic update
+```
+
+This fetches the latest release, verifies its checksum, replaces the binary, refreshes the bundle in `~/.claude/`, applies migrations, and finishes with a health check. The [install guide](/guides/install#updating) owns the rest: the update flags, the background staging that makes the swap near-instant, and the merge flow that protects a hand-edited `~/.claude/CLAUDE.md`.
+
+
+## Where to go next
+
+
+- [Concepts](/reference/concepts) — the ideas behind wikis, the lifecycle, and the output style.
+- [Workflow reference](/reference/workflow) — plan, implement, diagnose, and ship in detail.
+- [Commands](/reference/commands), [skills](/reference/skills), [agents](/reference/agents) — the full reference tables.
+- [Knowledge base guide](/guides/knowledge-base) — extend a folder of repos into a wiki that holds your non-code work too: tickets, research, and dumps.
+
+Not sure where to begin in a given repo? Run `/atomic-help`. It reads your git state and points at one next command.

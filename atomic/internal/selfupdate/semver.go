@@ -1,0 +1,156 @@
+package selfupdate
+
+import (
+	"fmt"
+	"strconv"
+	"strings"
+)
+
+type semver struct {
+	major      int
+	minor      int
+	patch      int
+	prerelease string // non-empty if prerelease
+}
+
+// parseSemver parses "vX.Y.Z", "X.Y.Z", "vX.Y.Z-pre", "X.Y.Z-pre".
+func parseSemver(s string) (semver, error) {
+	s = strings.TrimPrefix(s, "v")
+	if idx := strings.IndexByte(s, '+'); idx >= 0 {
+		s = s[:idx]
+	}
+	pre := ""
+	if idx := strings.IndexByte(s, '-'); idx >= 0 {
+		pre = s[idx+1:]
+		s = s[:idx]
+	}
+	parts := strings.SplitN(s, ".", 3)
+	if len(parts) != 3 {
+		return semver{}, fmt.Errorf("semver: invalid version %q", s)
+	}
+	major, err := strconv.Atoi(parts[0])
+	if err != nil {
+		return semver{}, fmt.Errorf("semver: invalid major in %q: %w", s, err)
+	}
+	minor, err := strconv.Atoi(parts[1])
+	if err != nil {
+		return semver{}, fmt.Errorf("semver: invalid minor in %q: %w", s, err)
+	}
+	patch, err := strconv.Atoi(parts[2])
+	if err != nil {
+		return semver{}, fmt.Errorf("semver: invalid patch in %q: %w", s, err)
+	}
+	return semver{major: major, minor: minor, patch: patch, prerelease: pre}, nil
+}
+
+// compare returns -1, 0, or 1 (a < b, a == b, a > b).
+func (a semver) compare(b semver) int {
+	if a.major != b.major {
+		return cmpInt(a.major, b.major)
+	}
+	if a.minor != b.minor {
+		return cmpInt(a.minor, b.minor)
+	}
+	if a.patch != b.patch {
+		return cmpInt(a.patch, b.patch)
+	}
+	// both have same numeric core — prerelease sorts lower
+	switch {
+	case a.prerelease == "" && b.prerelease == "":
+		return 0
+	case a.prerelease != "" && b.prerelease == "":
+		return -1 // a is prerelease, b is release
+	case a.prerelease == "" && b.prerelease != "":
+		return 1
+	default:
+		return comparePrerelease(a.prerelease, b.prerelease)
+	}
+}
+
+// comparePrerelease orders two non-empty prerelease strings by semver §11.4:
+// dot-separated identifiers left to right, all-digit identifiers numerically,
+// the rest lexically, numeric ranking below alphanumeric, and a longer
+// identifier list ranking above an otherwise-equal shorter one. Comparing the
+// raw strings instead would order "next.10" below "next.2".
+func comparePrerelease(a, b string) int {
+	as := strings.Split(a, ".")
+	bs := strings.Split(b, ".")
+	for i := 0; i < len(as) && i < len(bs); i++ {
+		if c := compareIdentifier(as[i], bs[i]); c != 0 {
+			return c
+		}
+	}
+	return cmpInt(len(as), len(bs))
+}
+
+func compareIdentifier(a, b string) int {
+	an, aNumeric := numericIdentifier(a)
+	bn, bNumeric := numericIdentifier(b)
+	switch {
+	case aNumeric && bNumeric:
+		return cmpInt(an, bn)
+	case aNumeric:
+		return -1
+	case bNumeric:
+		return 1
+	default:
+		return strings.Compare(a, b)
+	}
+}
+
+// numericIdentifier reports whether s is an all-digit identifier, with its
+// value. One too large for int is reported as non-numeric so it falls through
+// to a lexical comparison rather than overflowing.
+func numericIdentifier(s string) (int, bool) {
+	if s == "" {
+		return 0, false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return 0, false
+		}
+	}
+	n, err := strconv.Atoi(s)
+	if err != nil {
+		return 0, false
+	}
+	return n, true
+}
+
+func cmpInt(a, b int) int {
+	if a < b {
+		return -1
+	}
+	if a > b {
+		return 1
+	}
+	return 0
+}
+
+// IsValidSemver reports whether s is a parseable semver string.
+func IsValidSemver(s string) bool { _, err := parseSemver(s); return err == nil }
+
+// CompareSemver returns -1, 0, or 1 for a < b, a == b, a > b. Unparseable
+// input is treated as the 0.0.0 floor rather than an error.
+func CompareSemver(a, b string) int {
+	sv := func(s string) semver {
+		v, err := parseSemver(s)
+		if err != nil {
+			return semver{} // zero value == 0.0.0
+		}
+		return v
+	}
+	return sv(a).compare(sv(b))
+}
+
+func newerThan(current string, latest string) (bool, error) {
+	a, err := parseSemver(current)
+	if err != nil {
+		return false, err
+	}
+	b, err := parseSemver(latest)
+	if err != nil {
+		return false, err
+	}
+	return b.compare(a) > 0, nil
+}

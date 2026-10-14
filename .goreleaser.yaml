@@ -1,0 +1,52 @@
+project_name: atomic
+
+before:
+  hooks:
+    - sh -c "cd ./atomic && go generate ./..."
+
+builds:
+  - id: atomic
+    dir: ./atomic
+    main: ./cmd/atomic
+    binary: atomic
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+      - -X github.com/damusix/atomic-claude/atomic/internal/version.Version={{.Version}}
+      - -X github.com/damusix/atomic-claude/atomic/internal/version.Commit={{.ShortCommit}}
+
+archives:
+  - id: atomic
+    name_template: "atomic_{{.Version}}_{{.Os}}_{{.Arch}}"
+    files:
+      - README.md
+
+checksum:
+  name_template: "checksums.txt"
+  algorithm: sha256
+
+# A -next.N tag must reach GitHub flagged as a prerelease: the stable update
+# channel filters on that flag alone, and the default of false would hand every
+# stable user a pre-release build. make_latest keeps releases/latest — which
+# install.sh reads — pointing at the newest full release.
+release:
+  prerelease: auto
+  make_latest: "{{ not .Prerelease }}"
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-next"
+
+changelog:
+  use: github
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^chore:"
