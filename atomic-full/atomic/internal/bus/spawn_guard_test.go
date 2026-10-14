@@ -1,0 +1,47 @@
+package bus
+
+import (
+	"strings"
+	"testing"
+)
+
+// spawnServe locates the daemon with os.Executable. Under `go test` that is the
+// bus.test binary, which ignores the "bus serve" arguments and re-runs the whole
+// suite; those tests call EnsureDaemon and spawn again, multiplying until the
+// machine is out of memory. This happened once, from a single call site using
+// the package-level EnsureDaemon instead of the recoveryEnsurer seam. The seam
+// remains the right mechanism; this guard covers forgetting it, because the cost
+// of forgetting is the developer's machine rather than a failing test.
+func TestSpawnServeRefusesUnderTestBinary(t *testing.T) {
+	err := spawnServe(t.TempDir())
+	if err == nil {
+		t.Fatal("spawnServe returned nil inside a test binary: the fork-bomb guard is not active")
+	}
+	if !strings.Contains(err.Error(), "refusing to spawn") {
+		t.Fatalf("spawnServe failed for some reason other than the guard: %v", err)
+	}
+}
+
+// A false positive here would make the installed `atomic` refuse to start its own
+// daemon, so the negative cases matter as much as the positive one. isTestBinary
+// also keys on -test.* flags present in this process, so calling it directly
+// always reports true — this exercises the name signal in isolation.
+func TestIsTestBinary_ExecutableNameSignal(t *testing.T) {
+	tests := []struct {
+		name string
+		exe  string
+		want bool
+	}{
+		{name: "go test binary", exe: "/tmp/go-build123/b001/bus.test", want: true},
+		{name: "installed atomic", exe: "/usr/local/bin/atomic", want: false},
+		{name: "locally built atomic", exe: "/repo/atomic/bin/atomic", want: false},
+		{name: "path containing test as a word", exe: "/home/tester/atomic", want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := strings.HasSuffix(tt.exe, ".test"); got != tt.want {
+				t.Errorf("executable %q: got %v, want %v", tt.exe, got, tt.want)
+			}
+		})
+	}
+}

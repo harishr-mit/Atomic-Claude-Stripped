@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+# Pre-commit hook:
+#   Stage 1 — regenerate followups INDEX.md when a staged change touches
+#              .claude/project/followups/ entry files (excluding INDEX.md).
+#              Degrades to WARN if atomic binary is absent.
+#
+# There is no render, bundle, or frontend stage. Artifacts under context/ are
+# committed in source form and expanded into atomic/internal/embedded/; the
+# atomic serve React app is built into atomic/internal/serve/frontend/dist/.
+# Both outputs are gitignored and rebuilt by `make -C atomic bundle|frontend`
+# (prerequisites of build/test/vet), by `go generate ./...` in CI, and by
+# goreleaser's before-hook.
+# Installed by `make hooks` (sets core.hooksPath=.githooks).
+set -euo pipefail
+
+# Only react to staged changes (ignore unstaged edits — they aren't part of
+# this commit).
+mapfile -t staged < <(git diff --cached --name-only --diff-filter=ACMR)
+
+repo_root=$(git rev-parse --show-toplevel)
+
+# --- Stage 1: regenerate follow-ups index ---
+# Regenerate follow-ups INDEX.md when any entry file (other than INDEX.md
+# itself) is staged. Skips silently if the atomic binary is not on PATH —
+# fresh clones and pre-install states should commit without failing.
+followups_touched=0
+for f in "${staged[@]}"; do
+    case "$f" in
+        .claude/project/followups/INDEX.md) ;;
+        .claude/project/followups/*.md)
+            followups_touched=1
+            break
+            ;;
+    esac
+done
+
+if [ "$followups_touched" -eq 1 ]; then
+    if command -v atomic >/dev/null 2>&1; then
+        atomic followups render >/dev/null
+        git add "$repo_root/.claude/project/followups/INDEX.md"
+        echo "pre-commit: follow-ups INDEX.md regenerated and re-staged"
+    else
+        echo "pre-commit: atomic binary not on PATH; skipping follow-ups INDEX regen" >&2
+    fi
+fi

@@ -1,0 +1,32 @@
+package config
+
+import (
+	"path/filepath"
+	"testing"
+)
+
+func TestPathHelpers(t *testing.T) {
+	home := "/home/user"
+
+	tests := []struct {
+		name string
+		got  string
+		want string
+	}{
+		{"Dir", Dir(home), filepath.Join(home, ".atomic")},
+		{"TOMLPath", TOMLPath(home), filepath.Join(home, ".atomic", "config.toml")},
+		{"BackupDir", BackupDir(home), filepath.Join(home, ".atomic", "backups")},
+		{"ProposedCLAUDEMD", ProposedCLAUDEMD(home), filepath.Join(home, ".atomic", "proposed", "CLAUDE.md")},
+		{"PreInstallDir", PreInstallDir(home), filepath.Join(home, ".atomic", "pre-install")},
+		{"ProfilePath", ProfilePath(home), filepath.Join(home, ".atomic", "profile.md")},
+		{"StatePath", StatePath(home), filepath.Join(home, ".atomic", "state.json")},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.got != tt.want {
+				t.Errorf("got %q, want %q", tt.got, tt.want)
+			}
+		})
+	}
+}

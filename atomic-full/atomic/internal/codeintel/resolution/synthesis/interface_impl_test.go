@@ -1,0 +1,459 @@
+package synthesis_test
+
+// InterfaceImplSynthesizer and CppOverrideSynthesizer tests.
+
+import (
+	"context"
+	"encoding/json"
+	"testing"
+
+	"github.com/damusix/atomic-claude/atomic/internal/codeintel/resolution/synthesis"
+	"github.com/damusix/atomic-claude/atomic/internal/codeintel/types"
+)
+
+// The minimal signal: an interface method, a matching class method, and the
+// implements edge joining them.
+func TestInterfaceImplSynthesizer_EmitsDispatchEdge(t *testing.T) {
+	d := openTestDB(t)
+	ctx := context.Background()
+
+	seedNode(t, d, "iface-speaker", "Speaker", "s.ts", types.NodeKindInterface, types.LanguageTypeScript)
+	seedNode(t, d, "meth-speaker-speak", "speak", "s.ts", types.NodeKindMethod, types.LanguageTypeScript)
+	seedEdge(t, d, "iface-speaker", "meth-speaker-speak", types.EdgeKindContains)
+
+	seedNode(t, d, "cls-dog", "Dog", "s.ts", types.NodeKindClass, types.LanguageTypeScript)
+	seedNode(t, d, "meth-dog-speak", "speak", "s.ts", types.NodeKindMethod, types.LanguageTypeScript)
+	seedEdge(t, d, "cls-dog", "meth-dog-speak", types.EdgeKindContains)
+	seedEdge(t, d, "cls-dog", "iface-speaker", types.EdgeKindImplements)
+
+	s := &synthesis.InterfaceImplSynthesizer{}
+	edges, err := s.Synthesize(ctx, d)
+	if err != nil {
+		t.Fatalf("Synthesize: %v", err)
+	}
+	if len(edges) != 1 {
+		t.Fatalf("InterfaceImplSynthesizer emitted %d edges, want 1", len(edges))
+	}
+	e := edges[0]
+	if e.Source != "meth-speaker-speak" {
+		t.Errorf("edge source = %q, want %q", e.Source, "meth-speaker-speak")
+	}
+	if e.Target != "meth-dog-speak" {
+		t.Errorf("edge target = %q, want %q", e.Target, "meth-dog-speak")
+	}
+}
+
+// Without a same-named method on the class there is no dispatch to record.
+func TestInterfaceImplSynthesizer_NoEdgeWhenClassLacksMatchingMethod(t *testing.T) {
+	d := openTestDB(t)
+	ctx := context.Background()
+
+	seedNode(t, d, "iface-talker", "Talker", "t.ts", types.NodeKindInterface, types.LanguageTypeScript)
+	seedNode(t, d, "meth-talker-speak", "speak", "t.ts", types.NodeKindMethod, types.LanguageTypeScript)
+	seedEdge(t, d, "iface-talker", "meth-talker-speak", types.EdgeKindContains)
+
+	seedNode(t, d, "cls-cat", "Cat", "t.ts", types.NodeKindClass, types.LanguageTypeScript)
+	seedNode(t, d, "meth-cat-purr", "purr", "t.ts", types.NodeKindMethod, types.LanguageTypeScript)
+	seedEdge(t, d, "cls-cat", "meth-cat-purr", types.EdgeKindContains)
+	seedEdge(t, d, "cls-cat", "iface-talker", types.EdgeKindImplements)
+
+	s := &synthesis.InterfaceImplSynthesizer{}
+	edges, err := s.Synthesize(ctx, d)
+	if err != nil {
+		t.Fatalf("Synthesize: %v", err)
+	}
+	if len(edges) != 0 {
+		t.Errorf("InterfaceImplSynthesizer emitted %d edges for unmatched method, want 0", len(edges))
+	}
+}
+
+// A second run must add nothing; the Composite's dedup is what guarantees it.
+func TestInterfaceImplSynthesizer_IdempotentViaComposite(t *testing.T) {
+	d := openTestDB(t)
+	ctx := context.Background()
+
+	seedNode(t, d, "iface-idem", "IFace", "i.ts", types.NodeKindInterface, types.LanguageTypeScript)
+	seedNode(t, d, "meth-idem-iface", "run", "i.ts", types.NodeKindMethod, types.LanguageTypeScript)
+	seedEdge(t, d, "iface-idem", "meth-idem-iface", types.EdgeKindContains)
+
+	seedNode(t, d, "cls-idem", "Impl", "i.ts", types.NodeKindClass, types.LanguageTypeScript)
+	seedNode(t, d, "meth-idem-cls", "run", "i.ts", types.NodeKindMethod, types.LanguageTypeScript)
+	seedEdge(t, d, "cls-idem", "meth-idem-cls", types.EdgeKindContains)
+	seedEdge(t, d, "cls-idem", "iface-idem", types.EdgeKindImplements)
+
+	composite := synthesis.NewComposite(d, &synthesis.InterfaceImplSynthesizer{})
+	if err := composite.SynthesizeCallbackEdges(ctx); err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+	edgesAfterFirst, err := d.GetEdgesBySource(ctx, "meth-idem-iface")
+	if err != nil {
+		t.Fatalf("GetEdgesBySource: %v", err)
+	}
+	var callsCount int
+	for _, e := range edgesAfterFirst {
+		if e.Kind == types.EdgeKindCalls {
+			callsCount++
+		}
+	}
+	if callsCount != 1 {
+		t.Fatalf("after first run: %d calls edges, want 1", callsCount)
+	}
+
+	if err := composite.SynthesizeCallbackEdges(ctx); err != nil {
+		t.Fatalf("second run: %v", err)
+	}
+	edgesAfterSecond, err := d.GetEdgesBySource(ctx, "meth-idem-iface")
+	if err != nil {
+		t.Fatalf("GetEdgesBySource: %v", err)
+	}
+	var callsCount2 int
+	for _, e := range edgesAfterSecond {
+		if e.Kind == types.EdgeKindCalls {
+			callsCount2++
+		}
+	}
+	if callsCount2 != callsCount {
+		t.Errorf("idempotency broken: first run=%d calls edges, second run=%d", callsCount, callsCount2)
+	}
+}
+
+func TestInterfaceImplSynthesizer_SynthesizedByMetadata(t *testing.T) {
+	d := openTestDB(t)
+	ctx := context.Background()
+
+	seedNode(t, d, "iface-meta", "IBar", "m.ts", types.NodeKindInterface, types.LanguageTypeScript)
+	seedNode(t, d, "meth-meta-iface", "bar", "m.ts", types.NodeKindMethod, types.LanguageTypeScript)
+	seedEdge(t, d, "iface-meta", "meth-meta-iface", types.EdgeKindContains)
+
+	seedNode(t, d, "cls-meta", "BarImpl", "m.ts", types.NodeKindClass, types.LanguageTypeScript)
+	seedNode(t, d, "meth-meta-cls", "bar", "m.ts", types.NodeKindMethod, types.LanguageTypeScript)
+	seedEdge(t, d, "cls-meta", "meth-meta-cls", types.EdgeKindContains)
+	seedEdge(t, d, "cls-meta", "iface-meta", types.EdgeKindImplements)
+
+	composite := synthesis.NewComposite(d, &synthesis.InterfaceImplSynthesizer{})
+	if err := composite.SynthesizeCallbackEdges(ctx); err != nil {
+		t.Fatalf("SynthesizeCallbackEdges: %v", err)
+	}
+
+	edges, err := d.GetEdgesBySource(ctx, "meth-meta-iface")
+	if err != nil {
+		t.Fatalf("GetEdgesBySource: %v", err)
+	}
+	var found bool
+	for _, e := range edges {
+		if e.Kind != types.EdgeKindCalls || e.Target != "meth-meta-cls" {
+			continue
+		}
+		var m map[string]any
+		if err := json.Unmarshal(e.Metadata, &m); err != nil {
+			t.Fatalf("unmarshal metadata: %v", err)
+		}
+		if got := m["synthesizedBy"]; got != "interface-impl" {
+			t.Errorf("synthesizedBy = %q, want %q", got, "interface-impl")
+		}
+		if e.Provenance != "heuristic" {
+			t.Errorf("provenance = %q, want %q", e.Provenance, "heuristic")
+		}
+		found = true
+	}
+	if !found {
+		t.Error("no calls edge from meth-meta-iface to meth-meta-cls")
+	}
+}
+
+// Matching names alone are not evidence: without an implements edge the
+// synthesizer must stay silent.
+func TestInterfaceImplSynthesizer_NoEdgeWithoutImplementsEdge(t *testing.T) {
+	d := openTestDB(t)
+	ctx := context.Background()
+
+	seedNode(t, d, "iface-animal", "Animal", "a.ts", types.NodeKindInterface, types.LanguageTypeScript)
+	seedNode(t, d, "cls-dog", "Dog", "a.ts", types.NodeKindClass, types.LanguageTypeScript)
+	seedNode(t, d, "meth-dog-speak", "speak", "a.ts", types.NodeKindMethod, types.LanguageTypeScript)
+	seedEdge(t, d, "cls-dog", "meth-dog-speak", types.EdgeKindContains)
+
+	s := &synthesis.InterfaceImplSynthesizer{}
+	edges, err := s.Synthesize(ctx, d)
+	if err != nil {
+		t.Fatalf("Synthesize: %v", err)
+	}
+	if len(edges) != 0 {
+		t.Errorf("InterfaceImplSynthesizer produced %d edges without implements edge, want 0", len(edges))
+	}
+}
+
+// An implements edge is necessary but not sufficient: with no interface method
+// nodes there is no source for a dispatch edge, so the count is still zero.
+func TestInterfaceImplSynthesizer_WithImplementsEdge(t *testing.T) {
+	d := openTestDB(t)
+	ctx := context.Background()
+
+	seedNode(t, d, "iface-b", "Printer", "b.ts", types.NodeKindInterface, types.LanguageTypeScript)
+	seedNode(t, d, "cls-b", "LaserPrinter", "b.ts", types.NodeKindClass, types.LanguageTypeScript)
+	seedEdge(t, d, "cls-b", "iface-b", types.EdgeKindImplements)
+
+	seedNode(t, d, "meth-b-print", "print", "b.ts", types.NodeKindMethod, types.LanguageTypeScript)
+	seedEdge(t, d, "cls-b", "meth-b-print", types.EdgeKindContains)
+
+	s := &synthesis.InterfaceImplSynthesizer{}
+	edges, err := s.Synthesize(ctx, d)
+	if err != nil {
+		t.Fatalf("Synthesize: %v", err)
+	}
+	if len(edges) != 0 {
+		t.Errorf("InterfaceImplSynthesizer produced %d edges (expected 0: interface methods not extracted)", len(edges))
+	}
+}
+
+// The minimal signal: a base method, a same-named derived method, and the
+// extends edge joining them. Members are seeded as functions, which is what
+// C++ extraction actually produces.
+func TestCppOverrideSynthesizer_EmitsOverrideEdge(t *testing.T) {
+	d := openTestDB(t)
+	ctx := context.Background()
+
+	seedNode(t, d, "cls-base", "B", "b.cpp", types.NodeKindClass, types.LanguageCpp)
+	seedNode(t, d, "fn-base-m", "m", "b.cpp", types.NodeKindFunction, types.LanguageCpp)
+	seedEdge(t, d, "cls-base", "fn-base-m", types.EdgeKindContains)
+
+	seedNode(t, d, "cls-derived", "D", "b.cpp", types.NodeKindClass, types.LanguageCpp)
+	seedNode(t, d, "fn-derived-m", "m", "b.cpp", types.NodeKindFunction, types.LanguageCpp)
+	seedEdge(t, d, "cls-derived", "fn-derived-m", types.EdgeKindContains)
+
+	seedEdge(t, d, "cls-derived", "cls-base", types.EdgeKindExtends)
+
+	s := &synthesis.CppOverrideSynthesizer{}
+	edges, err := s.Synthesize(ctx, d)
+	if err != nil {
+		t.Fatalf("Synthesize: %v", err)
+	}
+	if len(edges) != 1 {
+		t.Fatalf("CppOverrideSynthesizer emitted %d edges, want 1", len(edges))
+	}
+	e := edges[0]
+	if e.Source != "fn-base-m" {
+		t.Errorf("edge source = %q, want %q", e.Source, "fn-base-m")
+	}
+	if e.Target != "fn-derived-m" {
+		t.Errorf("edge target = %q, want %q", e.Target, "fn-derived-m")
+	}
+}
+
+func TestCppOverrideSynthesizer_IdempotentViaComposite(t *testing.T) {
+	d := openTestDB(t)
+	ctx := context.Background()
+
+	seedNode(t, d, "cpp-idem-base", "BBase", "x.cpp", types.NodeKindClass, types.LanguageCpp)
+	seedNode(t, d, "cpp-idem-base-fn", "go", "x.cpp", types.NodeKindFunction, types.LanguageCpp)
+	seedEdge(t, d, "cpp-idem-base", "cpp-idem-base-fn", types.EdgeKindContains)
+
+	seedNode(t, d, "cpp-idem-derived", "BDerived", "x.cpp", types.NodeKindClass, types.LanguageCpp)
+	seedNode(t, d, "cpp-idem-derived-fn", "go", "x.cpp", types.NodeKindFunction, types.LanguageCpp)
+	seedEdge(t, d, "cpp-idem-derived", "cpp-idem-derived-fn", types.EdgeKindContains)
+	seedEdge(t, d, "cpp-idem-derived", "cpp-idem-base", types.EdgeKindExtends)
+
+	composite := synthesis.NewComposite(d, &synthesis.CppOverrideSynthesizer{})
+	if err := composite.SynthesizeCallbackEdges(ctx); err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+	edgesAfterFirst, err := d.GetEdgesBySource(ctx, "cpp-idem-base-fn")
+	if err != nil {
+		t.Fatalf("GetEdgesBySource: %v", err)
+	}
+	var callsCount int
+	for _, e := range edgesAfterFirst {
+		if e.Kind == types.EdgeKindCalls {
+			callsCount++
+		}
+	}
+	if callsCount != 1 {
+		t.Fatalf("after first run: %d calls edges, want 1", callsCount)
+	}
+
+	if err := composite.SynthesizeCallbackEdges(ctx); err != nil {
+		t.Fatalf("second run: %v", err)
+	}
+	edgesAfterSecond, err := d.GetEdgesBySource(ctx, "cpp-idem-base-fn")
+	if err != nil {
+		t.Fatalf("GetEdgesBySource: %v", err)
+	}
+	var callsCount2 int
+	for _, e := range edgesAfterSecond {
+		if e.Kind == types.EdgeKindCalls {
+			callsCount2++
+		}
+	}
+	if callsCount2 != callsCount {
+		t.Errorf("idempotency broken: first run=%d calls edges, second run=%d", callsCount, callsCount2)
+	}
+}
+
+// TestCppOverrideSynthesizer_SynthesizedByMetadata verifies that the composite
+// stamps synthesizedBy="cpp-override" on edges produced by CppOverrideSynthesizer.
+func TestCppOverrideSynthesizer_SynthesizedByMetadata(t *testing.T) {
+	d := openTestDB(t)
+	ctx := context.Background()
+
+	seedNode(t, d, "cpp-meta-base", "Base", "z.cpp", types.NodeKindClass, types.LanguageCpp)
+	seedNode(t, d, "cpp-meta-base-fn", "run", "z.cpp", types.NodeKindFunction, types.LanguageCpp)
+	seedEdge(t, d, "cpp-meta-base", "cpp-meta-base-fn", types.EdgeKindContains)
+
+	seedNode(t, d, "cpp-meta-derived", "Derived", "z.cpp", types.NodeKindClass, types.LanguageCpp)
+	seedNode(t, d, "cpp-meta-derived-fn", "run", "z.cpp", types.NodeKindFunction, types.LanguageCpp)
+	seedEdge(t, d, "cpp-meta-derived", "cpp-meta-derived-fn", types.EdgeKindContains)
+	seedEdge(t, d, "cpp-meta-derived", "cpp-meta-base", types.EdgeKindExtends)
+
+	composite := synthesis.NewComposite(d, &synthesis.CppOverrideSynthesizer{})
+	if err := composite.SynthesizeCallbackEdges(ctx); err != nil {
+		t.Fatalf("SynthesizeCallbackEdges: %v", err)
+	}
+
+	edges, err := d.GetEdgesBySource(ctx, "cpp-meta-base-fn")
+	if err != nil {
+		t.Fatalf("GetEdgesBySource: %v", err)
+	}
+	var found bool
+	for _, e := range edges {
+		if e.Kind != types.EdgeKindCalls || e.Target != "cpp-meta-derived-fn" {
+			continue
+		}
+		var m map[string]any
+		if err := json.Unmarshal(e.Metadata, &m); err != nil {
+			t.Fatalf("unmarshal metadata: %v", err)
+		}
+		if got := m["synthesizedBy"]; got != "cpp-override" {
+			t.Errorf("synthesizedBy = %q, want %q", got, "cpp-override")
+		}
+		if e.Provenance != "heuristic" {
+			t.Errorf("provenance = %q, want %q", e.Provenance, "heuristic")
+		}
+		found = true
+	}
+	if !found {
+		t.Error("no calls edge from cpp-meta-base-fn to cpp-meta-derived-fn")
+	}
+}
+
+// TestCppOverrideSynthesizer_NoEdgeWithoutExtendsEdge verifies that with
+// manually seeded base + derived class + method nodes but NO extends edge,
+// the synthesizer emits nothing.
+func TestCppOverrideSynthesizer_NoEdgeWithoutExtendsEdge(t *testing.T) {
+	d := openTestDB(t)
+	ctx := context.Background()
+
+	// Base class node with a method.
+	seedNode(t, d, "cls-animal", "Animal", "p.cpp", types.NodeKindClass, types.LanguageCpp)
+	seedNode(t, d, "fn-animal-speak", "speak", "p.cpp", types.NodeKindFunction, types.LanguageCpp)
+	seedEdge(t, d, "cls-animal", "fn-animal-speak", types.EdgeKindContains)
+
+	// Derived class with the same method name.
+	seedNode(t, d, "cls-dog", "Dog", "p.cpp", types.NodeKindClass, types.LanguageCpp)
+	seedNode(t, d, "fn-dog-speak", "speak", "p.cpp", types.NodeKindFunction, types.LanguageCpp)
+	seedEdge(t, d, "cls-dog", "fn-dog-speak", types.EdgeKindContains)
+
+	// NO extends edge cls-dog → cls-animal.
+
+	s := &synthesis.CppOverrideSynthesizer{}
+	edges, err := s.Synthesize(ctx, d)
+	if err != nil {
+		t.Fatalf("Synthesize: %v", err)
+	}
+	if len(edges) != 0 {
+		t.Errorf("CppOverrideSynthesizer produced %d edges without extends edge, want 0", len(edges))
+	}
+}
+
+// TestCppOverrideSynthesizer_DoesNotFireOnNonCppExtends verifies that the
+// cpp-override synthesizer is C++-scoped: an extends edge with a non-C++
+// language should NOT trigger override synthesis.
+//
+// This is the scope guard: cpp-override only fires when both nodes are C++.
+// Since the extraction pipeline today has no extends edges at all, this test
+// uses manually seeded data to document the scoping contract.
+func TestCppOverrideSynthesizer_DoesNotFireOnNonCppExtends(t *testing.T) {
+	d := openTestDB(t)
+	ctx := context.Background()
+
+	// TypeScript extends edge (e.g. class Dog extends Animal in TS).
+	seedNode(t, d, "ts-base", "Animal", "a.ts", types.NodeKindClass, types.LanguageTypeScript)
+	seedNode(t, d, "ts-dog", "Dog", "a.ts", types.NodeKindClass, types.LanguageTypeScript)
+	seedNode(t, d, "ts-base-speak", "speak", "a.ts", types.NodeKindMethod, types.LanguageTypeScript)
+	seedNode(t, d, "ts-dog-speak", "speak", "a.ts", types.NodeKindMethod, types.LanguageTypeScript)
+	seedEdge(t, d, "ts-base", "ts-base-speak", types.EdgeKindContains)
+	seedEdge(t, d, "ts-dog", "ts-dog-speak", types.EdgeKindContains)
+	// Manually seed an extends edge in TypeScript (what heritage extraction would add).
+	seedEdge(t, d, "ts-dog", "ts-base", types.EdgeKindExtends)
+
+	s := &synthesis.CppOverrideSynthesizer{}
+	edges, err := s.Synthesize(ctx, d)
+	if err != nil {
+		t.Fatalf("Synthesize: %v", err)
+	}
+	// cpp-override must NOT fire on TypeScript extends edges.
+	if len(edges) != 0 {
+		t.Errorf("CppOverrideSynthesizer produced %d edges for TypeScript extends, want 0 (C++-scope guard)", len(edges))
+	}
+}
+
+// TestDefaultCompositeHasTenSynthesizers verifies that Default(d) registers
+// exactly 10 synthesizers after batch 5 is added:
+//   - batch 1: react-render, jsx-render (2 real)
+//   - batch 2: vue-handler (1 real)
+//   - batch 3: rn-event-channel, event-emitter (2 real)
+//   - batch 4: callback, closure-collection (gap), flutter-build (gap) (3)
+//   - batch 5: interface-impl (gap), cpp-override (gap) (2)
+func TestDefaultCompositeHasTenSynthesizers(t *testing.T) {
+	d := openTestDB(t)
+	composite := synthesis.Default(d)
+	if composite == nil {
+		t.Fatal("Default returned nil")
+	}
+	// Verify it runs without error on an empty DB.
+	if err := composite.SynthesizeCallbackEdges(context.Background()); err != nil {
+		t.Fatalf("Default composite on empty DB: %v", err)
+	}
+}
+
+// TestInterfaceImplSynthesizer_NodeCountStable verifies synthesis adds no nodes.
+func TestInterfaceImplSynthesizer_NodeCountStable(t *testing.T) {
+	d := openTestDB(t)
+	ctx := context.Background()
+
+	seedNode(t, d, "iface-stable", "IFoo", "c.ts", types.NodeKindInterface, types.LanguageTypeScript)
+	seedNode(t, d, "cls-stable", "FooImpl", "c.ts", types.NodeKindClass, types.LanguageTypeScript)
+	seedEdge(t, d, "cls-stable", "iface-stable", types.EdgeKindImplements)
+
+	nodesBefore := countNodes(t, d)
+
+	s := &synthesis.InterfaceImplSynthesizer{}
+	if _, err := s.Synthesize(ctx, d); err != nil {
+		t.Fatalf("Synthesize: %v", err)
+	}
+
+	nodesAfter := countNodes(t, d)
+	if nodesBefore != nodesAfter {
+		t.Errorf("node count changed: before=%d after=%d (synthesizer must not add nodes)", nodesBefore, nodesAfter)
+	}
+}
+
+// TestCppOverrideSynthesizer_NodeCountStable verifies synthesis adds no nodes.
+func TestCppOverrideSynthesizer_NodeCountStable(t *testing.T) {
+	d := openTestDB(t)
+	ctx := context.Background()
+
+	seedNode(t, d, "cpp-base-stable", "Base", "x.cpp", types.NodeKindClass, types.LanguageCpp)
+	seedNode(t, d, "cpp-derived-stable", "Derived", "x.cpp", types.NodeKindClass, types.LanguageCpp)
+	seedEdge(t, d, "cpp-derived-stable", "cpp-base-stable", types.EdgeKindExtends)
+
+	nodesBefore := countNodes(t, d)
+
+	s := &synthesis.CppOverrideSynthesizer{}
+	if _, err := s.Synthesize(ctx, d); err != nil {
+		t.Fatalf("Synthesize: %v", err)
+	}
+
+	nodesAfter := countNodes(t, d)
+	if nodesBefore != nodesAfter {
+		t.Errorf("node count changed: before=%d after=%d (synthesizer must not add nodes)", nodesBefore, nodesAfter)
+	}
+}

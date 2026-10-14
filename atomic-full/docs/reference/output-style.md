@@ -1,0 +1,91 @@
+# Output style
+
+The output style is the communication layer. Its goal is clarity, and a paragraph is one instrument, not the only one. When an answer has parts that compare, nest, or sequence, replies reach for a table, an indented tree, or an ASCII flow so the structure carries the meaning instead of a wall of prose. Filler is dropped, fragments are fine, and short synonyms win, but compression serves the structure, it does not lead. Technical terms and code blocks are never altered.
+
+A shorter reply that reads worse is a failure, not a win. When a structure communicates faster than sentences (three components with a hierarchy, a sequence that branches across actors), the style picks the structure. When a paragraph is genuinely the clearest form, it stays a paragraph.
+
+It is also the most optional part of atomic-claude. The skills, commands, agents, and wikis all work without it. The output style makes Claude's replies clearer to read.
+
+
+## Where the behavior actually comes from
+
+| Layer | What it contributes | Always active? |
+|-------|-------------------|:---------:|
+| `CLAUDE.md` | Principles, testing philosophy, code discipline | ✓ |
+| Skills | TDD, verification, debugging, commit messages | ✓ |
+| Commands | Workflow orchestration (plan, implement, ship) | When invoked |
+| Agents | Specialized workers with their own prompts | When dispatched |
+| **Output style** | **Clarity: drop filler, fragments OK, structured output (tables, trees, ASCII flow)** | **When selected** |
+
+The first four layers carry the load. The output style shapes how Claude communicates the result.
+
+
+## Sentence rules
+
+The drop-list covers filler, pleasantries, hedging, preamble, closing recaps, em-dashes, and articles where the noun is predictable. Articles stay when the content surprises: "Rollback deletes the backup" is a warning, and a warning must parse on first read. Beyond the drop-list, four rules shape the reply:
+
+- **Say what you mean.** Mannered prose is removed outright. It makes the reader work harder so the writer can perform, and a metaphor drags in connotations the writer did not choose. When a literal phrase is available, it is used.
+- **Phrases readers hate.** The style file carries a short list of stock AI phrases ("here's the thing", "load-bearing", "not X, it's Y", and their siblings). None are used; the fact they were decorating is stated instead.
+- **Answer first, condition before instruction.** "If index stale, re-run indexer" scans in execution order. The trailing-condition form risks the reader acting before reading the guard.
+- **Say it once, in the user's terms.** Restatement is the filler that word-cutting misses. Renaming the user's concepts mid-answer forces a mental cross-reference for zero gain.
+
+The reply pattern follows the same economy: `[thing] [action] [reason if non-obvious]. [next step].` A reason appears only when the reader cannot derive it, and when code fully answers the question, code is the whole reply.
+
+A reply defaults to under 120 words. Only a report, review, or plan runs longer, and then structure carries the length rather than paragraphs.
+
+The style file carries three bad/good example pairs, so the model learns the contrast, not just the instruction.
+
+
+## Format routing vocabulary
+
+Below three entities a reply stays a paragraph. Past that, content shape picks the format, and the more visual the better. Shapes compose within one reply only when the content has more than one.
+
+Ten routes cover the shapes that come up in practice:
+
+| Route | Use when | Avoid when |
+|-------|----------|------------|
+| hierarchy | content nests (parent/child, containment) | items are flat and unrelated |
+| comparison | options or rows share the same attributes | two options, a sentence already covers it |
+| causality | one event leads to another | the chain is short and self-explanatory |
+| process | steps must happen in a fixed order | steps have no fixed order |
+| change | before/after or a code delta | there's no prior state to contrast |
+| lifecycle | an entity moves through named states | only two states — a sentence suffices |
+| data flow | data or control passes between stages | fewer than two hand-offs exist |
+| records | a single structured entity, named fields | the fields read fine inline as prose |
+| status rows | several items each report the same few fields | one item, one status |
+| data model | entities relate to each other | there's only one entity |
+
+Three caps keep the vocabulary from sprawling. Aligned columns must sit inside a fence — markdown collapses whitespace, so unfenced alignment breaks on render. A reply keeps to one symbol vocabulary: the system already uses 🔴🟡🔵 for findings, so `[OK]/[WARN]/[FAIL]` tags would duplicate that taxonomy. Box-drawing cards are cut outright — their borders break on wrap, they cost tokens, and a heading already does the job a bordered card would.
+
+
+## How it gets activated
+
+`atomic claude install` and `atomic claude update` seed `"outputStyle": "Atomic"` into `~/.claude/settings.json` when that key is absent, and the session-start hook does the same on every session. A fresh machine ends up on Atomic with no action. The seed never overwrites an existing value.
+
+Only a user-level install seeds. `atomic claude install --target ./.claude` writes nothing, because that settings file is committed and the style is a personal choice; pick it there with `/config` instead.
+
+`/config` → **Output style** still overrides per project, writing `.claude/settings.local.json`, which wins over the user-level value. `outputStyle` is read once at session start, so a change takes effect on the next session or after `/clear`.
+
+To opt out, run `atomic config set output_style.seed false`. **Deleting the `outputStyle` key is not an opt-out.** The session-start hook re-seeds it on the next session, so the flag is the only way to stop it.
+
+`atomic doctor` (category 14) reports what each settings file contains and flags a project-level `outputStyle` as a possible override. It does not compute an effective style, because Claude Code's own file-placement precedence is not documented well enough to replicate.
+
+
+## Safety always wins
+
+Five Auto-Clarity triggers revert the style to full prose: security warnings, irreversible-action confirmations, multi-step sequences where fragment order could be misread, cases where the compression itself creates technical ambiguity, and the user asking to clarify or repeating a question. Clarity is the point, and these are the cases where a terse fragment could be misread. Atomic style resumes once the clear part is done.
+
+
+## Two surfaces, one file voice
+
+Atomic style governs replies in the terminal, never file contents. When Claude writes or edits a file, that file follows the `atomic-writing` skill: README, guides, reference pages, specs, design docs, wiki pages, `CLAUDE.md`, and the prompt artifacts alike. One voice, with length set by what the surface has to carry. Saying "stop atomic" or switching output styles reverts the reply voice immediately, and has no effect on how files are written.
+
+
+## Subagents do not inherit the style
+
+Output styles only attach to the main agent. When the orchestrator dispatches `atomic-implementer`, `atomic-reviewer`, or any other subagent, those agents follow their own system prompts — they are already terse by design.
+
+
+## `keep-coding-instructions: true`
+
+The shipped output style sets this flag. With it on, selecting Atomic preserves Claude Code's default engineering guidance (scope discipline, comment defaults, security awareness) and adds atomic's tone rules on top. Selecting it is additive — it does not replace anything.

@@ -1,0 +1,88 @@
+name: CI
+
+on:
+  # Push-CI runs only on main (post-merge). PR branches are gated by the
+  # pull_request trigger below, so a branch with an open PR is tested once —
+  # not twice, as the previous push-on-every-branch trigger did (one run for the
+  # branch push, a duplicate for the PR). The release-please bot branch is
+  # naturally excluded (it isn't main); its merge-into-main result is still
+  # gated via pull_request, which always reflects current main.
+  push:
+    branches: [main, next]
+  pull_request:
+    branches: [main, next]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./atomic
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: ./atomic/go.mod
+          # go.sum is under atomic/, not the repo root. Without this the
+          # action's default cache silently fails both restore and save, so
+          # every run recompiles cold and no test results are ever reused.
+          cache-dependency-path: ./atomic/go.sum
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.13"
+
+      - name: Install frontend dependencies
+        working-directory: ./atomic/internal/serve/frontend
+        run: bun install --frozen-lockfile
+
+      # The bundle and frontend/dist are both gitignored, so there is no drift
+      # gate here — only the generation step that makes internal/embedded and
+      # internal/serve compile.
+      - name: Generate bundle and frontend
+        run: go generate ./...
+
+      - name: Test
+        run: go test ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Format check
+        run: |
+          out=$(gofmt -l .)
+          if [ -n "$out" ]; then
+            echo "Unformatted files:"
+            echo "$out"
+            exit 1
+          fi
+
+      - name: Validate
+        working-directory: ./atomic
+        run: |
+          make build
+          ../bin/atomic validate
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./atomic/internal/serve/frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.13"
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Test
+        run: bun test
+
+      # dist/ is gitignored, so this only proves the app builds — the test
+      # job's `go generate` produces the copy that gets embedded.
+      - name: Build
+        run: bun run build.ts
